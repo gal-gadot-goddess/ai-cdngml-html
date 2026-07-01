@@ -148,15 +148,27 @@ def fetch_one_html(service, allow_repost=False):
 
     print('  No new files. Repost mode: weighted random selection...')
 
+    # Get last published file to avoid consecutive repeat
+    history = get_published_history()
+    last_file = history[-1]['file'] if history else None
+
     repost_counts = get_repost_counts()
     choices = []
     weights = []
     for f in all_files:
+        # Skip the file that was JUST posted last run (no consecutive repeats)
+        if f['name'] == last_file and len(all_files) > 1:
+            continue
         count = repost_counts.get(f['name'], 0)
         # Weight: 0 posts=1000, 1 post=333, 2 posts=111, etc.
         weight = max(1, 1000 // (3 ** min(count, 6)))
         choices.append(f)
         weights.append(weight)
+
+    if not choices:
+        # If only one file exists, we have no choice
+        choices = all_files
+        weights = [1] * len(all_files)
 
     selected = random.choices(choices, weights=weights, k=1)[0]
     post_count = repost_counts.get(selected['name'], 0)
@@ -164,73 +176,49 @@ def fetch_one_html(service, allow_repost=False):
     return selected
 
 
-def extract_html_title(html_path):
-    """Extract <title> tag content from an HTML file."""
+def read_video_meta(html_path):
+    """Read embedded video metadata from inside the HTML file.
+    
+    Looks for: <script id="video-meta" type="application/json">{...}</script>
+    Returns dict with title, description, hashtags or None.
+    """
     try:
         with open(html_path, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.read(4096)  # Read first 4KB — title is always in <head>
+            content = f.read(16384)
         import re
-        m = re.search(r'<title[^>]*>(.*?)</title>', content, re.IGNORECASE | re.DOTALL)
+        m = re.search(
+            r'<script[^>]*id=["\']video-meta["\'][^>]*type=["\']application/json["\'][^>]*>'
+            r'\s*(\{.*?\})\s*</script>',
+            content, re.IGNORECASE | re.DOTALL
+        )
         if m:
-            return m.group(1).strip()
+            data = json.loads(m.group(1))
+            if data.get('title') and data.get('description'):
+                return data
     except:
         pass
     return None
 
 
-def generate_title_and_description(html_path, html_file_name):
-    """Generate video title + description from HTML filename and <title> tag.
+def get_video_title_and_description(html_path, html_file_name):
+    """Get video title, description, and hashtags.
     
-    Uses POLLINATIONS_API_KEY (same as Valeria Solverde) if available,
-    otherwise falls back to filename-based title + default description.
+    Priority:
+    1. Embedded <script id="video-meta"> JSON inside the HTML file
+    2. Filename-based fallback
     """
-    # Extract topic from filename
+    # Try embedded metadata first
+    meta = read_video_meta(html_path)
+    if meta:
+        print(f'  📝 Using embedded video metadata')
+        return meta['title'], meta['description'], meta.get('hashtags', '')
+
+    # Fallback: filename-based
     base = os.path.splitext(html_file_name)[0]
     topic = base.replace('_', ' ').replace('-', ' ').title()
-
-    # Try to get HTML <title> tag
-    html_title = extract_html_title(html_path)
-    if html_title:
-        topic = html_title
-
-    # ── Use AI if API key is available ────────────────────────────────────────
-    api_key = os.getenv('POLLINATIONS_API_KEY')
-    if api_key:
-        import requests
-        prompt = (
-            f'Write a short, catchy title (max 8 words) and a 2-sentence description '
-            f'for a YouTube Short / Instagram Reel about "{topic}" — '
-            f'an educational machine learning / programming visualization. '
-            f'Make it engaging and clear. '
-            f'Return ONLY a valid JSON object: {{"title": "...", "description": "..."}}'
-        )
-        try:
-            resp = requests.post(
-                'https://gen.pollinations.ai/v1/chat/completions',
-                headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
-                json={
-                    'model': os.getenv('AI_MODEL', 'openai'),
-                    'messages': [{'role': 'user', 'content': prompt}],
-                    'temperature': 0.8,
-                },
-                timeout=15
-            )
-            data = resp.json()
-            content = data.get('choices', [{}])[0].get('message', {}).get('content', '')
-            content = content.replace('```json', '').replace('```', '').strip()
-            result = json.loads(content)
-            if result.get('title') and result.get('description'):
-                return result['title'], result['description']
-        except Exception as e:
-            print(f'  ⚠️  AI caption failed: {e}')
-
-    # ── Fallback ──────────────────────────────────────────────────────────────
-    desc = (
-        f'{topic} — Machine Learning visualization.\n\n'
-        f'Watch and learn. Perfect for beginners and enthusiasts.\n\n'
-        f'#MachineLearning #AI #DataScience #Coding #Shorts'
-    )
-    return topic, desc
+    desc = f'{topic} — watch how machine learning works. Follow for more ML visuals! #machinelearning #ai #datascience #coding #shorts'
+    print(f'  📝 Using filename-based fallback')
+    return topic, desc, '#machinelearning #ai #datascience #coding #shorts'
 
 
 def download_file(service, file_id, dest_path):
@@ -456,11 +444,13 @@ def run_pipeline():
         if not ok:
             return
 
-        # ── Step 4: Generate title + description ──────────────────────────────
-        print('\n📝 Generating title & description...')
-        title, description = generate_title_and_description(html_path, html_file['name'])
+        # ── Step 4: Read title + description from HTML ────────────────────────
+        print('\n📝 Reading video metadata...')
+        title, description, hashtags = get_video_title_and_description(html_path, html_file['name'])
         print(f'  Title: {title}')
         print(f'  Description: {description[:100]}...')
+        if hashtags:
+            print(f'  Hashtags: {hashtags}')
 
         # ── Step 5: Publish ──────────────────────────────────────────────────
         print('\n📤 STEP 5: Publishing to social media...')
