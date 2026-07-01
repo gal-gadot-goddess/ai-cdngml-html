@@ -1,0 +1,75 @@
+name: HTML → Video Auto Publisher
+
+on:
+  schedule:
+    - cron: '0 8 * * *'
+    - cron: '0 16 * * *'
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  render-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install system deps (FFmpeg + Chromium)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libnss3 libatk-bridge2.0-0 \
+            libdrm-dev libgbm-dev libxkbcommon-x11-0 libxcomposite-dev \
+            libxdamage-dev libxrandr-dev libcups2 libpango-1.0-0
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify Puppeteer Chromium
+        run: node -e "require('puppeteer').executablePath()"
+
+      - name: Run auto pipeline
+        env:
+          HTML_DRIVE_FOLDER_ID: ${{ secrets.HTML_DRIVE_FOLDER_ID }}
+          AUDIO_DRIVE_FOLDER_ID: ${{ secrets.AUDIO_DRIVE_FOLDER_ID }}
+          GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}
+          OUTPUT_DIR: Processed_Videos
+          MIN_VIDEO_DURATION: '12'
+          MAX_VIDEO_DURATION: '30'
+          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+          INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
+          FACEBOOK_ACCESS_TOKEN: ${{ secrets.FACEBOOK_ACCESS_TOKEN }}
+          FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+          THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+        run: python auto_pipeline.py
+
+      - name: Commit published log
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add published_html.json 2>/dev/null || true
+          if ! git diff --staged --quiet; then
+            git commit -m "Update published HTML log [skip ci]"
+            git push
+          fi
