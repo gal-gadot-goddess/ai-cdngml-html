@@ -164,6 +164,75 @@ def fetch_one_html(service, allow_repost=False):
     return selected
 
 
+def extract_html_title(html_path):
+    """Extract <title> tag content from an HTML file."""
+    try:
+        with open(html_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read(4096)  # Read first 4KB — title is always in <head>
+        import re
+        m = re.search(r'<title[^>]*>(.*?)</title>', content, re.IGNORECASE | re.DOTALL)
+        if m:
+            return m.group(1).strip()
+    except:
+        pass
+    return None
+
+
+def generate_title_and_description(html_path, html_file_name):
+    """Generate video title + description from HTML filename and <title> tag.
+    
+    Uses POLLINATIONS_API_KEY (same as Valeria Solverde) if available,
+    otherwise falls back to filename-based title + default description.
+    """
+    # Extract topic from filename
+    base = os.path.splitext(html_file_name)[0]
+    topic = base.replace('_', ' ').replace('-', ' ').title()
+
+    # Try to get HTML <title> tag
+    html_title = extract_html_title(html_path)
+    if html_title:
+        topic = html_title
+
+    # ── Use AI if API key is available ────────────────────────────────────────
+    api_key = os.getenv('POLLINATIONS_API_KEY')
+    if api_key:
+        import requests
+        prompt = (
+            f'Write a short, catchy title (max 8 words) and a 2-sentence description '
+            f'for a YouTube Short / Instagram Reel about "{topic}" — '
+            f'an educational machine learning / programming visualization. '
+            f'Make it engaging and clear. '
+            f'Return ONLY a valid JSON object: {{"title": "...", "description": "..."}}'
+        )
+        try:
+            resp = requests.post(
+                'https://gen.pollinations.ai/v1/chat/completions',
+                headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+                json={
+                    'model': os.getenv('AI_MODEL', 'openai'),
+                    'messages': [{'role': 'user', 'content': prompt}],
+                    'temperature': 0.8,
+                },
+                timeout=15
+            )
+            data = resp.json()
+            content = data.get('choices', [{}])[0].get('message', {}).get('content', '')
+            content = content.replace('```json', '').replace('```', '').strip()
+            result = json.loads(content)
+            if result.get('title') and result.get('description'):
+                return result['title'], result['description']
+        except Exception as e:
+            print(f'  ⚠️  AI caption failed: {e}')
+
+    # ── Fallback ──────────────────────────────────────────────────────────────
+    desc = (
+        f'{topic} — Machine Learning visualization.\n\n'
+        f'Watch and learn. Perfect for beginners and enthusiasts.\n\n'
+        f'#MachineLearning #AI #DataScience #Coding #Shorts'
+    )
+    return topic, desc
+
+
 def download_file(service, file_id, dest_path):
     from googleapiclient.http import MediaIoBaseDownload
     request = service.files().get_media(fileId=file_id)
@@ -229,45 +298,93 @@ def convert_html_to_video(html_path, audio_path, output_path):
     return True
 
 
-# ── Publishing ─────────────────────────────────────────────────────────────
-def publish_video(video_path, title):
+# ── Publishing (mirrors Valeria Solverde pattern) ──────────────────────────
+def publish_video(video_path, title, description):
     print(f'  📤 Publishing: {os.path.basename(video_path)}')
-    results = []
+    results = {}
 
     if not os.path.isdir(UPLOAD_PATH):
         print(f'  ⚠️  Upload modules not found')
         print(f'  📁 Video saved at: {video_path}')
         return
 
-    sys.path.insert(0, UPLOAD_PATH)
+    sys.path.insert(0, os.path.dirname(UPLOAD_PATH))
+    combined_caption = f'{title}\n\n{description}'
 
-    platforms = []
+    # ── Instagram Reel ────────────────────────────────────────────────────────
     if os.getenv('INSTAGRAM_ACCESS_TOKEN') and os.getenv('INSTAGRAM_ACCOUNT_ID'):
-        platforms.append(('Instagram', 'upload_instagram', 'upload_to_instagram', (video_path, title)))
-    if os.getenv('FACEBOOK_ACCESS_TOKEN') and os.getenv('FACEBOOK_PAGE_ID'):
-        platforms.append(('Facebook', 'upload_facebook', 'upload_to_facebook', (video_path, title, title)))
-    if os.getenv('THREADS_ACCESS_TOKEN') and os.getenv('THREADS_USER_ID'):
-        platforms.append(('Threads', 'upload_threads', 'upload_to_threads', (video_path, title)))
-    if os.getenv('YT_CLIENT_ID') and os.getenv('YT_REFRESH_TOKEN'):
-        desc = f'{title}\n\nAutomated ML visualization.\n#Shorts #MachineLearning #AI'
-        platforms.append(('YouTube', 'upload_to_youtube', 'upload_to_youtube', (video_path, title, desc)))
-
-    if not platforms:
-        print('  ⚠️  No credentials set. Video saved locally.')
-        return
-
-    for name, mod_name, fn_name, args in platforms:
         try:
-            mod = __import__(mod_name, fromlist=[fn_name])
-            func = getattr(mod, fn_name)
-            r = func(*args)
-            status = r.get('status', 'done') if isinstance(r, dict) else 'done'
-            results.append(f'{name}: {status}')
+            from upload.upload_instagram import upload_to_instagram
+            r = upload_to_instagram(video_path, combined_caption, is_story=False)
+            if r and r.get('status') == 'skipped':
+                results['Instagram Reel'] = f'skipped ({r.get("reason", "")})'
+            else:
+                results['Instagram Reel'] = 'done'
         except Exception as e:
-            results.append(f'{name}: skipped ({str(e)[:80]})')
+            results['Instagram Reel'] = f'skipped ({str(e)[:60]})'
 
-    for r in results:
-        print(f'  {r}')
+    # ── Instagram Story ───────────────────────────────────────────────────────
+    if os.getenv('INSTAGRAM_ACCESS_TOKEN') and os.getenv('INSTAGRAM_ACCOUNT_ID'):
+        try:
+            from upload.upload_instagram import upload_to_instagram
+            r = upload_to_instagram(video_path, combined_caption, is_story=True)
+            if r and r.get('status') == 'skipped':
+                results['Instagram Story'] = f'skipped ({r.get("reason", "")})'
+            else:
+                results['Instagram Story'] = 'done'
+        except Exception as e:
+            results['Instagram Story'] = f'skipped ({str(e)[:60]})'
+
+    # ── Facebook Reel ─────────────────────────────────────────────────────────
+    if os.getenv('FACEBOOK_ACCESS_TOKEN') and os.getenv('FACEBOOK_PAGE_ID'):
+        try:
+            from upload.upload_facebook import upload_to_facebook
+            r = upload_to_facebook(video_path, description, title=title)
+            if r and r.get('status') == 'skipped':
+                results['Facebook Reel'] = f'skipped ({r.get("reason", "")})'
+            else:
+                results['Facebook Reel'] = 'done'
+        except Exception as e:
+            results['Facebook Reel'] = f'skipped ({str(e)[:60]})'
+
+    # ── Facebook Story ────────────────────────────────────────────────────────
+    if os.getenv('FACEBOOK_ACCESS_TOKEN') and os.getenv('FACEBOOK_PAGE_ID'):
+        try:
+            from upload.upload_facebook import upload_to_facebook_story
+            r = upload_to_facebook_story(video_path)
+            if r and r.get('status') == 'skipped':
+                results['Facebook Story'] = f'skipped'
+            else:
+                results['Facebook Story'] = 'done'
+        except Exception as e:
+            results['Facebook Story'] = f'skipped ({str(e)[:60]})'
+
+    # ── Threads ───────────────────────────────────────────────────────────────
+    if os.getenv('THREADS_ACCESS_TOKEN') and os.getenv('THREADS_USER_ID'):
+        try:
+            from upload.upload_threads import upload_to_threads
+            r = upload_to_threads(video_path, combined_caption)
+            if r and r.get('status') == 'skipped':
+                results['Threads'] = f'skipped ({r.get("reason", "")})'
+            else:
+                results['Threads'] = 'done'
+        except Exception as e:
+            results['Threads'] = f'skipped ({str(e)[:60]})'
+
+    # ── YouTube Shorts ────────────────────────────────────────────────────────
+    if os.getenv('YT_CLIENT_ID') and os.getenv('YT_REFRESH_TOKEN'):
+        try:
+            from upload.upload_to_youtube import upload_to_youtube
+            tags = ['machine learning', 'ai', 'visualization', 'coding', 'shorts', 'education', 'datascience']
+            upload_to_youtube(video_path, title, description, tags=tags)
+            results['YouTube'] = 'done'
+        except Exception as e:
+            results['YouTube'] = f'skipped ({str(e)[:60]})'
+
+    for platform, status in results.items():
+        print(f'  {platform}: {status}')
+    if not results:
+        print('  ⚠️  No credentials set. Video saved locally.')
 
 
 # ── Main pipeline ──────────────────────────────────────────────────────────
@@ -339,10 +456,15 @@ def run_pipeline():
         if not ok:
             return
 
-        # ── Step 4: Publish ──────────────────────────────────────────────────
-        print('\n📤 STEP 4: Publishing to social media...')
-        title = os.path.splitext(html_file['name'])[0].replace('_', ' ').replace('-', ' ').title()
-        publish_video(out_path, title)
+        # ── Step 4: Generate title + description ──────────────────────────────
+        print('\n📝 Generating title & description...')
+        title, description = generate_title_and_description(html_path, html_file['name'])
+        print(f'  Title: {title}')
+        print(f'  Description: {description[:100]}...')
+
+        # ── Step 5: Publish ──────────────────────────────────────────────────
+        print('\n📤 STEP 5: Publishing to social media...')
+        publish_video(out_path, title, description)
 
         # ── Step 5: Log ──────────────────────────────────────────────────────
         mark_published(html_file['name'], html_file['id'])
