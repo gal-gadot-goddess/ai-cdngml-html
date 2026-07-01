@@ -25,8 +25,9 @@ async function html2video(htmlPath, audioPath, outputPath) {
     audioDur = 0;
   }
 
+  const MIN_DUR = 18;  // Match ~17s animation runtime
   const MAX_DUR = 30;
-  const videoDur = Math.min(MAX_DUR, Math.max(12, audioDur));
+  const videoDur = Math.min(MAX_DUR, Math.max(MIN_DUR, audioDur));
   console.log(`Audio: ${audioDur.toFixed(2)}s | Video: ${videoDur.toFixed(2)}s`);
 
   // Temp directory — ensure cleanup even on crash
