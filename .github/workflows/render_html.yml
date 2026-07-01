@@ -51,7 +51,7 @@ jobs:
           AUDIO_DRIVE_FOLDER_ID: ${{ secrets.AUDIO_DRIVE_FOLDER_ID }}
           GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}
           OUTPUT_DIR: Processed_Videos
-          MIN_VIDEO_DURATION: '12'
+          MIN_VIDEO_DURATION: '18'
           MAX_VIDEO_DURATION: '30'
           INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
           INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
