@@ -157,7 +157,7 @@ def upload_to_instagram(video_path, caption, is_story=False):
             if _ret == 0:
                 break
             time.sleep(5)
-        video_url = "https://raw.githubusercontent.com/" + gal-gadot-goddess + "/" + ai-cdngml-html + "/main/" + _vid_name
+        video_url = "https://raw.githubusercontent.com/ai-cdngml-html/main/" + _vid_name
         print("[instagram] GitHub raw URL: " + video_url)
 
         container_url = f"https://graph.facebook.com/v21.0/{user_id}/media"
